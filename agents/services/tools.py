@@ -1,4 +1,5 @@
 import asyncio
+import os
 import aiohttp
 
 # ---------------------------------------------------------------------------
@@ -84,6 +85,52 @@ SEARCH_INSURANCE_COVERAGE = {
     },
 }
 
+SEARCH_CLINICAL_TRIALS = {
+    "type": "function",
+    "function": {
+        "name": "search_clinical_trials",
+        "description": "Search ClinicalTrials.gov for active recruiting trials relevant to a medical condition.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "condition": {"type": "string", "description": "Medical condition or diagnosis to search trials for"},
+            },
+            "required": ["condition"],
+        },
+    },
+}
+
+SEARCH_NPI_DOCTORS = {
+    "type": "function",
+    "function": {
+        "name": "search_npi_doctors",
+        "description": "Search the federal NPI registry for real licensed doctors or specialists near a zip code.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "specialty": {"type": "string", "description": "Medical specialty (e.g. Cardiology, Hematology, General Practice)"},
+                "zip_code": {"type": "string", "description": "US zip code to search near"},
+            },
+            "required": ["specialty", "zip_code"],
+        },
+    },
+}
+
+SEND_EMERGENCY_SMS = {
+    "type": "function",
+    "function": {
+        "name": "send_emergency_sms",
+        "description": "Send an emergency SMS alert to the patient's designated emergency contact. Use ONLY when urgency is CRITICAL (life-threatening situation).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "The emergency alert message to send"},
+            },
+            "required": ["message"],
+        },
+    },
+}
+
 # ---------------------------------------------------------------------------
 # Tool implementations
 # ---------------------------------------------------------------------------
@@ -162,7 +209,6 @@ async def lookup_fda_drug(drug_name: str) -> str:
 
 async def check_fda_drug_events(drugs: list) -> str:
     try:
-        # Search FDA FAERS for adverse events involving all listed drugs together
         drug_terms = "+AND+".join(
             f'patient.drug.medicinalproduct:"{d}"' for d in drugs
         )
@@ -172,20 +218,13 @@ async def check_fda_drug_events(drugs: list) -> str:
                 if r.status != 200:
                     return f"No FDA adverse event data found for combination: {', '.join(drugs)}."
                 data = await r.json()
-
         results = data.get("results", [])
         if not results:
             return f"No adverse event reports found in FAERS for {', '.join(drugs)} together."
-
         total = data.get("meta", {}).get("results", {}).get("total", len(results))
         summary_parts = [f"FDA FAERS found {total} adverse event report(s) for {', '.join(drugs)} used together.\n"]
-
         for i, report in enumerate(results[:3], 1):
-            reactions = [
-                r.get("reactionmeddrapt", "unknown")
-                for r in report.get("patient", {}).get("reaction", [])
-            ]
-            serious = report.get("serious", "")
+            reactions = [r.get("reactionmeddrapt", "unknown") for r in report.get("patient", {}).get("reaction", [])]
             seriousness = []
             if report.get("seriousnessdeath") == "1":
                 seriousness.append("death")
@@ -193,12 +232,10 @@ async def check_fda_drug_events(drugs: list) -> str:
                 seriousness.append("hospitalization")
             if report.get("seriousnesslifethreatening") == "1":
                 seriousness.append("life-threatening")
-
             summary_parts.append(
                 f"Report {i}: Reactions — {', '.join(reactions[:5])}."
                 + (f" Serious outcomes: {', '.join(seriousness)}." if seriousness else "")
             )
-
         return "\n".join(summary_parts)
     except Exception as e:
         return f"FDA adverse event lookup unavailable: {e}"
@@ -207,6 +244,103 @@ async def check_fda_drug_events(drugs: list) -> str:
 async def search_insurance_coverage(query: str) -> str:
     targeted_query = f"{query} site:cms.gov OR site:healthcare.gov OR site:medicare.gov"
     return await search_web(targeted_query)
+
+
+async def search_clinical_trials(condition: str) -> str:
+    try:
+        url = (
+            f"https://clinicaltrials.gov/api/v2/studies"
+            f"?query.cond={condition.replace(' ', '+')}"
+            f"&filter.overallStatus=RECRUITING"
+            f"&pageSize=4"
+            f"&fields=NCTId,BriefTitle,Phase,LocationCity,LocationState,EligibilityCriteria"
+        )
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as r:
+                if r.status != 200:
+                    return f"No clinical trials found for '{condition}'."
+                data = await r.json()
+
+        studies = data.get("studies", [])
+        if not studies:
+            return f"No active recruiting trials found for '{condition}'."
+
+        total = data.get("totalCount", len(studies))
+        parts = [f"ClinicalTrials.gov — {total} recruiting trials found for '{condition}':\n"]
+        for s in studies[:4]:
+            proto = s.get("protocolSection", {})
+            id_mod = proto.get("identificationModule", {})
+            status_mod = proto.get("statusModule", {})
+            design_mod = proto.get("designModule", {})
+            nct_id = id_mod.get("nctId", "")
+            title = id_mod.get("briefTitle", "")
+            phase = ", ".join(design_mod.get("phases", ["N/A"]))
+            parts.append(f"• **{title}** ({phase})\n  ID: {nct_id} | https://clinicaltrials.gov/study/{nct_id}")
+        return "\n".join(parts)
+    except Exception as e:
+        return f"ClinicalTrials.gov search unavailable: {e}"
+
+
+async def search_npi_doctors(specialty: str, zip_code: str) -> str:
+    try:
+        url = (
+            f"https://npiregistry.cms.hhs.gov/api/"
+            f"?version=2.1"
+            f"&taxonomy_description={specialty.replace(' ', '+')}"
+            f"&postal_code={zip_code}"
+            f"&limit=5"
+            f"&enumeration_type=NPI-1"
+        )
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
+                if r.status != 200:
+                    return f"NPI registry search unavailable."
+                data = await r.json()
+
+        results = data.get("results", [])
+        if not results:
+            return f"No {specialty} providers found near zip code {zip_code} in the NPI registry."
+
+        count = data.get("result_count", len(results))
+        parts = [f"NPI Registry — {count} {specialty} providers near {zip_code}:\n"]
+        for p in results[:5]:
+            basic = p.get("basic", {})
+            name = f"Dr. {basic.get('first_name', '')} {basic.get('last_name', '')}".strip()
+            credential = basic.get("credential", "")
+            if credential:
+                name += f", {credential}"
+            addresses = p.get("addresses", [{}])
+            addr = addresses[0] if addresses else {}
+            city = addr.get("city", "")
+            state = addr.get("state", "")
+            phone = addr.get("telephone_number", "")
+            taxonomy = p.get("taxonomies", [{}])[0].get("desc", specialty)
+            parts.append(f"• **{name}** — {taxonomy}\n  {city}, {state}  📞 {phone}")
+        return "\n".join(parts)
+    except Exception as e:
+        return f"NPI registry search unavailable: {e}"
+
+
+async def send_emergency_sms(message: str) -> str:
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID")
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+    from_number = os.getenv("TWILIO_FROM_NUMBER")
+    to_number = os.getenv("EMERGENCY_CONTACT_NUMBER")
+
+    if not all([account_sid, auth_token, from_number, to_number]):
+        return "⚠️ Emergency SMS not configured (missing Twilio credentials in .env). Alert would have been sent to emergency contact."
+
+    try:
+        from twilio.rest import Client
+        client = Client(account_sid, auth_token)
+        sms = client.messages.create(
+            body=f"🚨 MEDAGENT EMERGENCY ALERT 🚨\n\n{message}\n\nThis is an automated alert from MedAgent.",
+            from_=from_number,
+            to=to_number,
+        )
+        return f"✅ Emergency SMS sent to emergency contact (SID: {sms.sid})"
+    except Exception as e:
+        return f"Emergency SMS failed: {e}"
 
 
 # ---------------------------------------------------------------------------
@@ -219,4 +353,7 @@ ALL_TOOL_HANDLERS = {
     "lookup_fda_drug": lookup_fda_drug,
     "check_fda_drug_events": check_fda_drug_events,
     "search_insurance_coverage": search_insurance_coverage,
+    "search_clinical_trials": search_clinical_trials,
+    "search_npi_doctors": search_npi_doctors,
+    "send_emergency_sms": send_emergency_sms,
 }

@@ -52,13 +52,18 @@ Rules:
 - If the query is a medical question (symptoms, medications, lab results, health concerns) → include relevant clinical agents, always including "risk"
 - If the query mentions insurance, billing, cost, coverage, copay, deductible, prior authorization, claims, or healthcare navigation → include "insurance"
 - A query can trigger both clinical agents AND "insurance" at the same time
-- If the query is NOT medical or health-related at all (greetings, agent identity, small talk) → return []
+- If the query is NOT medical or health-related at all (greetings, agent identity, small talk) → return agents: []
 
-Respond with ONLY a valid JSON array. Examples:
-- Symptoms only: ["symptom", "risk"]
-- Insurance only: ["insurance"]
-- Both: ["symptom", "drug", "risk", "insurance"]
-- Non-medical: []"""
+Respond with ONLY a valid JSON object with these fields:
+- "agents": array of agent names to consult (or [] for non-medical)
+- "suspected_conditions": brief comma-separated list of conditions hinted at by the query (empty string if non-medical or unclear)
+- "clarifying_question": one short follow-up question that would most help the specialists (empty string if enough info or non-medical)
+
+Examples:
+- Symptoms only: {"agents": ["symptom", "risk"], "suspected_conditions": "anemia, iron deficiency", "clarifying_question": "How long have you been experiencing these symptoms?"}
+- Insurance only: {"agents": ["insurance"], "suspected_conditions": "", "clarifying_question": "What type of insurance plan do you have (HMO, PPO, etc.)?"}
+- Both: {"agents": ["symptom", "drug", "risk", "insurance"], "suspected_conditions": "cardiac event", "clarifying_question": "Are you experiencing chest pain right now?"}
+- Non-medical: {"agents": [], "suspected_conditions": "", "clarifying_question": ""}"""
 
 IDENTITY_RESPONSE = """I'm **MedAgent** — an AI-powered medical multi-agent system built on the Fetch.ai network.
 
@@ -81,7 +86,7 @@ All relevant agents run simultaneously and their findings are synthesized into a
 ⚠️ *This system provides AI-generated information only — always consult a licensed healthcare provider.*"""
 
 
-async def decide_agents(query: str) -> list:
+async def decide_agents(query: str) -> dict:
     client = get_llm_client()
     try:
         response = await client.chat.completions.create(
@@ -96,13 +101,18 @@ async def decide_agents(query: str) -> list:
             content = content.split("```")[1]
             if content.startswith("json"):
                 content = content[4:]
-        agents = json.loads(content.strip())
+        parsed = json.loads(content.strip())
+        agents = parsed.get("agents", [])
         if agents and "risk" not in agents:
             agents.append("risk")
         valid = [a for a in agents if a in AGENT_ADDRESS_MAP]
-        return valid[:3]  # cap at 3 agents to keep latency low
+        return {
+            "agents": valid[:3],
+            "suspected_conditions": parsed.get("suspected_conditions", ""),
+            "clarifying_question": parsed.get("clarifying_question", ""),
+        }
     except Exception:
-        return ["symptom", "risk"]
+        return {"agents": ["symptom", "risk"], "suspected_conditions": "", "clarifying_question": ""}
 
 
 @chat_proto.on_message(ChatMessage)
@@ -117,7 +127,10 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
 
     chat_session_id = str(ctx.session)
 
-    agents_to_call = await decide_agents(text)
+    routing = await decide_agents(text)
+    agents_to_call = routing["agents"]
+    suspected_conditions = routing["suspected_conditions"]
+    clarifying_question = routing["clarifying_question"]
     ctx.logger.info(f"Routing to agents: {agents_to_call}")
 
     state = MedicalAgentState(
@@ -125,6 +138,7 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
         query=text,
         user_sender_address=sender,
         agents_to_call=agents_to_call,
+        suspected_conditions=suspected_conditions,
     )
     if not agents_to_call:
         await ctx.send(
@@ -143,7 +157,11 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
     state_service.set_state(chat_session_id, state)
 
     agent_names = ", ".join(AGENT_DISPLAY_NAMES[a] for a in agents_to_call)
-    status_msg = f"🏥 **Consulting specialist agents in parallel...**\n\n{agent_names}\n\n*Analyzing your query — full report coming shortly.*"
+    status_parts = [f"🏥 **Consulting specialist agents in parallel...**\n\n{agent_names}"]
+    if clarifying_question:
+        status_parts.append(f"\n💬 **While you wait:** {clarifying_question}")
+    status_parts.append("\n*Full report coming shortly.*")
+    status_msg = "\n".join(status_parts)
     await ctx.send(
         sender,
         ChatMessage(

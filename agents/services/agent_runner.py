@@ -60,4 +60,6 @@ async def run_with_tools(query: str, system_prompt: str, tools: list) -> str:
         else:
             return choice.message.content or ""
 
-    return choice.message.content or ""
+    # Loop exhausted — force a text response without tools so we always return something
+    response = await client.chat.completions.create(model=ASI_MODEL, messages=messages)
+    return response.choices[0].message.content or ""

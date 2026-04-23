@@ -16,6 +16,7 @@ class MedicalAgentState(Model):
 
     agents_to_call: List[str] = []
     agents_responded: List[str] = []
+    suspected_conditions: str = ""
 
     symptom_analysis: str = ""
     drug_interaction_analysis: str = ""

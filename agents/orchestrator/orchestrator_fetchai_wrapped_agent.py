@@ -21,11 +21,14 @@ orchestrator.include(chat_proto, publish_manifest=True)
 
 SYNTHESIS_PROMPT = """You are a senior physician synthesizing specialist assessments into a unified clinical summary for a patient.
 
+IMPORTANT: You have NO tools available. Do NOT attempt to call any tools, search the web, or look anything up. Work ONLY from the specialist reports provided in the user message — they already contain all the data you need.
+
 Your job:
 - Integrate all specialist reports into one coherent, non-repetitive response
 - Lead with the urgency level from the risk assessment
 - Provide a clear, prioritized action plan
 - Write in plain language (explain any medical terms used)
+- Preserve specific data verbatim — copy clinical trial titles/NCT IDs/links exactly as they appear, doctor names and phone numbers exactly as listed, drug interaction details, lab reference ranges. Never paraphrase these into generic advice like "visit the website" — include the actual items.
 
 Format your response exactly like this:
 
@@ -41,6 +44,14 @@ Format your response exactly like this:
 
 ## Warning Signs — Seek Immediate Care If:
 [Bullet list of red flags]
+
+[If clinical trials were found, add:]
+## Clinical Trials You May Qualify For
+[List each trial exactly as found: title, phase, NCT ID, and full link]
+
+[If nearby doctors were found, add:]
+## Specialists Near You
+[List each doctor exactly as found: name, specialty, city, phone]
 
 ---
 ⚠️ *This assessment is AI-generated and for informational purposes only. Always consult a licensed healthcare provider before making any medical decisions.*"""
@@ -121,7 +132,11 @@ async def synthesize(state: MedicalAgentState) -> str:
             {"role": "system", "content": SYNTHESIS_PROMPT},
             {
                 "role": "user",
-                "content": f"Patient query: {state.query}\n\nSpecialist reports:\n\n{combined}",
+                "content": (
+                    f"Patient query: {state.query}\n"
+                    + (f"Suspected conditions (for context): {state.suspected_conditions}\n" if state.suspected_conditions else "")
+                    + f"\nSpecialist reports:\n\n{combined}"
+                ),
             },
         ],
     )
