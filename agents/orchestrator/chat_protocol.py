@@ -99,7 +99,8 @@ async def decide_agents(query: str) -> list:
         agents = json.loads(content.strip())
         if agents and "risk" not in agents:
             agents.append("risk")
-        return [a for a in agents if a in AGENT_ADDRESS_MAP]
+        valid = [a for a in agents if a in AGENT_ADDRESS_MAP]
+        return valid[:3]  # cap at 3 agents to keep latency low
     except Exception:
         return ["symptom", "risk"]
 
