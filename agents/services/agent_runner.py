@@ -46,6 +46,16 @@ async def _execute_text_tool_call(call: dict) -> str:
     return str(await handler(**call["args"]))
 
 
+def build_query(state) -> str:
+    """Inject shared triage context so agents collaborate from a common hypothesis."""
+    if state.suspected_conditions:
+        return (
+            f"[Shared triage context — suspected conditions: {state.suspected_conditions}]\n\n"
+            f"{state.query}"
+        )
+    return state.query
+
+
 async def run_with_tools(query: str, system_prompt: str, tools: list) -> str:
     """
     Agentic tool-calling loop capped at 2 iterations.
@@ -103,6 +113,10 @@ async def run_with_tools(query: str, system_prompt: str, tools: list) -> str:
         else:
             return _strip_tool_call_markup(content)
 
-    # Loop exhausted — force a text response without tools
+    # Loop exhausted — force a plain text response by explicitly instructing no tool calls
+    messages.append({
+        "role": "user",
+        "content": "Now write your complete analysis as plain text. Do not call any tools or use any tool syntax."
+    })
     response = await client.chat.completions.create(model=ASI_MODEL, messages=messages)
     return _strip_tool_call_markup(response.choices[0].message.content or "")

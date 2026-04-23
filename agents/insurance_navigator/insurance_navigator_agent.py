@@ -2,7 +2,7 @@ import asyncio
 import re
 from agents.models.config import INSURANCE_NAVIGATOR_SEED
 from agents.models.models import AgentResponse, MedicalAgentState
-from agents.services.agent_runner import run_with_tools
+from agents.services.agent_runner import run_with_tools, build_query
 from agents.services.tools import (
     SEARCH_INSURANCE_COVERAGE, SEARCH_WEB,
     search_npi_doctors, search_google_places_doctors,
@@ -89,10 +89,10 @@ async def handle_message(ctx: Context, sender: str, state: MedicalAgentState):
             f"[Google Maps — Rated {specialty} providers near {zip_code}]\n{places_result}\n\n"
         )
 
-    enriched_query = doctor_prefix + query
+    enriched_query = doctor_prefix + build_query(state)
 
     result = await run_with_tools(
-        query=enriched_query,
+        query=enriched_query if enriched_query else build_query(state),
         system_prompt=SYSTEM_PROMPT,
         tools=[SEARCH_INSURANCE_COVERAGE, SEARCH_WEB],
     )

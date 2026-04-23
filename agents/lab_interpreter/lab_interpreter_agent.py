@@ -1,6 +1,6 @@
 from agents.models.config import LAB_INTERPRETER_SEED
 from agents.models.models import AgentResponse, MedicalAgentState
-from agents.services.agent_runner import run_with_tools
+from agents.services.agent_runner import run_with_tools, build_query
 from agents.services.tools import SEARCH_PUBMED, SEARCH_WEB
 from uagents import Agent, Context
 
@@ -36,7 +36,7 @@ Always note the source of reference ranges used."""
 async def handle_message(ctx: Context, sender: str, state: MedicalAgentState):
     ctx.logger.info(f"Lumen interpreting labs for session={state.chat_session_id}")
     result = await run_with_tools(
-        query=state.query,
+        query=build_query(state),
         system_prompt=SYSTEM_PROMPT,
         tools=[SEARCH_WEB, SEARCH_PUBMED],
     )

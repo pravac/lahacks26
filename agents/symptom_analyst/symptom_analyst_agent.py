@@ -1,6 +1,6 @@
 from agents.models.config import SYMPTOM_ANALYST_SEED
 from agents.models.models import AgentResponse, MedicalAgentState
-from agents.services.agent_runner import run_with_tools
+from agents.services.agent_runner import run_with_tools, build_query
 from agents.services.tools import SEARCH_WEB, SEARCH_PUBMED, SEARCH_CLINICAL_TRIALS
 from uagents import Agent, Context
 
@@ -37,7 +37,7 @@ Be specific. Always cite sources. Always include the actual trial listings."""
 async def handle_message(ctx: Context, sender: str, state: MedicalAgentState):
     ctx.logger.info(f"Nova analyzing symptoms for session={state.chat_session_id}")
     result = await run_with_tools(
-        query=state.query,
+        query=build_query(state),
         system_prompt=SYSTEM_PROMPT,
         tools=[SEARCH_PUBMED, SEARCH_WEB, SEARCH_CLINICAL_TRIALS],
     )

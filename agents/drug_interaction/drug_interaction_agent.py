@@ -1,6 +1,6 @@
 from agents.models.config import DRUG_INTERACTION_SEED
 from agents.models.models import AgentResponse, MedicalAgentState
-from agents.services.agent_runner import run_with_tools
+from agents.services.agent_runner import run_with_tools, build_query
 from agents.services.tools import LOOKUP_FDA_DRUG, CHECK_FDA_DRUG_EVENTS, SEARCH_WEB
 from uagents import Agent, Context
 
@@ -37,7 +37,7 @@ Always cite whether findings come from FDA label data, FAERS reports, or clinica
 async def handle_message(ctx: Context, sender: str, state: MedicalAgentState):
     ctx.logger.info(f"Sage checking drug interactions for session={state.chat_session_id}")
     result = await run_with_tools(
-        query=state.query,
+        query=build_query(state),
         system_prompt=SYSTEM_PROMPT,
         tools=[LOOKUP_FDA_DRUG, CHECK_FDA_DRUG_EVENTS, SEARCH_WEB],
     )
