@@ -116,6 +116,7 @@ SEARCH_NPI_DOCTORS = {
     },
 }
 
+
 SEND_EMERGENCY_SMS = {
     "type": "function",
     "function": {
@@ -321,6 +322,51 @@ async def search_npi_doctors(specialty: str, zip_code: str) -> str:
         return f"NPI registry search unavailable: {e}"
 
 
+
+async def search_google_places_doctors(specialty: str, location: str) -> str:
+    api_key = os.getenv("GOOGLE_PLACES_API_KEY")
+    if not api_key:
+        return "Google Places API key not configured (GOOGLE_PLACES_API_KEY missing from .env)."
+    try:
+        url = "https://places.googleapis.com/v1/places:searchText"
+        headers = {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": api_key,
+            "X-Goog-FieldMask": (
+                "places.displayName,places.formattedAddress,"
+                "places.internationalPhoneNumber,places.rating,"
+                "places.userRatingCount,places.businessStatus"
+            ),
+        }
+        body = {
+            "textQuery": f"{specialty} near {location}",
+            "maxResultCount": 8,
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=body, timeout=aiohttp.ClientTimeout(total=8)) as r:
+                if r.status != 200:
+                    text = await r.text()
+                    return f"Google Places search unavailable (status {r.status}): {text[:200]}"
+                data = await r.json()
+        places = data.get("places", [])
+        if not places:
+            return f"No Google Places results found for {specialty} near {location}."
+        parts = [f"Google Maps — Top {specialty} providers near {location}:\n"]
+        for p in places:
+            name = p.get("displayName", {}).get("text", "")
+            address = p.get("formattedAddress", "")
+            phone = p.get("internationalPhoneNumber", "")
+            rating = p.get("rating", "")
+            reviews = p.get("userRatingCount", "")
+            status = p.get("businessStatus", "")
+            rating_str = f"⭐ {rating} ({reviews} reviews)" if rating else ""
+            status_str = f" — {status.replace('_', ' ').title()}" if status else ""
+            parts.append(f"• **{name}** {rating_str}{status_str}\n  {address}  📞 {phone}")
+        return "\n".join(parts)
+    except Exception as e:
+        return f"Google Places search unavailable: {e}"
+
+
 async def send_emergency_sms(message: str) -> str:
     account_sid = os.getenv("TWILIO_ACCOUNT_SID")
     auth_token = os.getenv("TWILIO_AUTH_TOKEN")
@@ -355,5 +401,6 @@ ALL_TOOL_HANDLERS = {
     "search_insurance_coverage": search_insurance_coverage,
     "search_clinical_trials": search_clinical_trials,
     "search_npi_doctors": search_npi_doctors,
+    "search_google_places_doctors": search_google_places_doctors,
     "send_emergency_sms": send_emergency_sms,
 }
