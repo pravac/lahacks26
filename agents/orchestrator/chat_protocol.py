@@ -86,6 +86,47 @@ All relevant agents run simultaneously and their findings are synthesized into a
 ⚠️ *This system provides AI-generated information only — always consult a licensed healthcare provider.*"""
 
 
+EMERGENCY_TRIAGE_PROMPT = """You are an emergency triage AI. Respond with only "YES" or "NO".
+
+Is the following message describing a situation where someone needs 911 called RIGHT NOW — meaning there is an active life-threatening emergency, severe physical trauma, or immediate danger to life?
+
+Examples of YES: heart attack, stroke, can't breathe, car accident with injury, run over, broken bones, severe bleeding, overdose, choking, drowning, anaphylaxis, suicide attempt, fire/burn injury, electrocution.
+Examples of NO: chronic illness questions, medication questions, lab results, insurance questions, mild symptoms that have been ongoing."""
+
+EMERGENCY_RESPONSE = """🚨 **THIS IS A MEDICAL EMERGENCY — CALL 911 NOW** 🚨
+
+Your symptoms suggest a potentially life-threatening emergency.
+
+**Do this immediately:**
+1. **Call 911** (or have someone nearby call for you)
+2. **Do not drive yourself** to the hospital
+3. **Chew an aspirin** (325mg) if available and you are not allergic
+4. **Sit or lie down** and stay as calm as possible
+5. **Unlock your front door** so paramedics can enter
+
+Your emergency contact has been notified.
+
+---
+⚠️ *Do not wait for an AI response. Call 911 now.*"""
+
+
+async def _is_emergency(query: str) -> bool:
+    client = get_llm_client()
+    try:
+        response = await client.chat.completions.create(
+            model=ASI_MODEL,
+            messages=[
+                {"role": "system", "content": EMERGENCY_TRIAGE_PROMPT},
+                {"role": "user", "content": query},
+            ],
+            max_tokens=5,
+        )
+        answer = response.choices[0].message.content.strip().upper()
+        return answer.startswith("YES")
+    except Exception:
+        return False
+
+
 async def decide_agents(query: str) -> dict:
     client = get_llm_client()
     try:
@@ -124,6 +165,26 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
 
     text = " ".join(item.text for item in msg.content if isinstance(item, TextContent))
     ctx.logger.info(f"Received query: {text!r}")
+
+    # Emergency fast-path — LLM triage call (fast, single token response)
+    is_emergency = await _is_emergency(text)
+    if is_emergency:
+        ctx.logger.info("EMERGENCY detected — sending immediate response")
+        await ctx.send(
+            sender,
+            ChatMessage(
+                timestamp=datetime.now(tz=timezone.utc),
+                msg_id=uuid4(),
+                content=[
+                    TextContent(type="text", text=EMERGENCY_RESPONSE),
+                    EndSessionContent(type="end-session"),
+                ],
+            ),
+        )
+        # Fire Sentinel in background to send the emergency SMS
+        from agents.services.tools import send_emergency_sms
+        await send_emergency_sms(f"Emergency query received: {text[:300]}")
+        return
 
     chat_session_id = str(ctx.session)
 
